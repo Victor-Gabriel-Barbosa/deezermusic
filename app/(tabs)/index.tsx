@@ -1,47 +1,16 @@
 import { Image } from 'expo-image';
-import { StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { StyleSheet, FlatList, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { useState, useEffect } from 'react';
-import { useAudioPlayer, useAudioPlayerStatus, AudioSource } from 'expo-audio';
-import { FontAwesome } from '@expo/vector-icons';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
-// Interface com nomes corretos da API Deezer
-interface Musica {
-  id: number;
-  title: string;
-  artist: { name: string };
-  album: { cover_medium: string };
-  duration: number;
-}
+import { MusicPlayer, Musica } from '@/components/music-player';
 
 export default function HomeScreen() {
-  const [musica, setMusica] = useState<Musica[]>([]);
+  const [musicas, setMusicas] = useState<Musica[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingProx, setLoadingProx] = useState(false);
   const [index, setIndex] = useState(0);
-  const [tempMusica, setTempMusica] = useState<Musica | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-
-  const player = useAudioPlayer();
-  const status = useAudioPlayerStatus(player);
-
-  // Quando uma música termina, avança para a próxima
-  useEffect(() => {
-    if (status.didJustFinish) {
-      const i = musica.findIndex(t => t.id === tempMusica?.id);
-      const proxIndex = (i + 1) % musica.length;
-      playMusica(musica[proxIndex]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
-
-  // Carrega as primeiras músicas
-  useEffect(() => {
-    fetchMusica();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [musicaAtual, setMusicaAtual] = useState<Musica | null>(null);
 
   // Busca músicas da Deezer
   const fetchMusica = async (add = false) => {
@@ -51,8 +20,8 @@ export default function HomeScreen() {
       const res = await fetch(`https://api.deezer.com/chart/0/tracks?index=${add ? index : 0}`);
       const data = await res.json();
 
-      if (add) setMusica(prev => [...prev, ...data.data]);
-      else setMusica(data.data);
+      if (add) setMusicas(prev => [...prev, ...data.data]);
+      else setMusicas(data.data);
 
       setIndex(prev => prev + 25);
     } catch (error) {
@@ -63,56 +32,30 @@ export default function HomeScreen() {
     }
   };
 
+  // Carrega ao abrir
+  useEffect(() => {
+    fetchMusica();
+  }, []);
+
   // Carrega mais músicas
   const loadMusicas = async () => {
     setLoadingProx(true);
     await fetchMusica(true);
   };
 
-  // Formata duração em mm:ss
+  // Formata duração
   const fmtDuracao = (duracao: number) => {
     const minutes = Math.floor(duracao / 60);
     const seconds = duracao % 60;
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  // Reproduz a música selecionada
-  const playMusica = async (musica: Musica) => {
-    try {
-      // Tenta pegar do cache
-      const cache = await AsyncStorage.getItem(`musica_${musica.id}`);
-      let prevUrl = cache;
-
-      if (!prevUrl) {
-        // Busca detalhes na API
-        const res = await fetch(`https://api.deezer.com/track/${musica.id}`);
-        const musicaData = await res.json();
-
-        if (!musicaData.preview) throw new Error('Preview não disponível');
-
-        prevUrl = musicaData.preview;
-        await AsyncStorage.setItem(`musica_${musica.id}`, prevUrl!);
-      }
-
-      player.replace(prevUrl as AudioSource);
-      player.play();
-      setTempMusica(musica);
-      setIsPlaying(true);
-    } catch (error) {
-      console.error('Erro ao reproduzir a música:', error);
-      Alert.alert('Erro', 'Não foi possível reproduzir esta música. Tente outra.', [{ text: 'OK' }]);
-    }
-  };
-
-  // Alterna entre play e pause
-  const togglePlay = () => {
-    if (player.playing) {
-      player.pause();
-      setIsPlaying(false);
-    } else {
-      player.play();
-      setIsPlaying(true);
-    }
+  // Próxima música automática
+  const tocarProxima = () => {
+    if (!musicaAtual || musicas.length === 0) return;
+    const i = musicas.findIndex(t => t.id === musicaAtual.id);
+    const proxIndex = (i + 1) % musicas.length;
+    setMusicaAtual(musicas[proxIndex]);
   };
 
   // Exibe carregando
@@ -124,14 +67,14 @@ export default function HomeScreen() {
     );
   }
 
-  // Renderiza cada música
+  // Renderiza item
   const renderMusicas = ({ item }: { item: Musica }) => {
-    const isTemp = tempMusica?.id === item.id;
+    const isTemp = musicaAtual?.id === item.id;
 
     return (
       <TouchableOpacity
         style={[styles.musicaItem, isTemp && styles.tempMusica]}
-        onPress={() => playMusica(item)}
+        onPress={() => setMusicaAtual(item)}
       >
         <Image source={{ uri: item.album.cover_medium }} style={styles.albumCover} />
         <ThemedView style={styles.musicaInfo}>
@@ -156,7 +99,7 @@ export default function HomeScreen() {
   return (
     <ThemedView style={styles.container}>
       <FlatList
-        data={musica}
+        data={musicas}
         renderItem={renderMusicas}
         keyExtractor={(item) => item.id.toString()}
         style={styles.musicaList}
@@ -177,24 +120,8 @@ export default function HomeScreen() {
         )}
       </TouchableOpacity>
 
-      {tempMusica && (
-        <ThemedView style={styles.player}>
-          <Image source={{ uri: tempMusica.album.cover_medium }} style={styles.playerCover} />
-          <ThemedView style={styles.playerInfo}>
-            <ThemedText type="defaultSemiBold" numberOfLines={1}>
-              {tempMusica.title}
-            </ThemedText>
-            <ThemedText>{tempMusica.artist.name}</ThemedText>
-          </ThemedView>
-          <TouchableOpacity onPress={togglePlay} style={styles.playButton}>
-            <FontAwesome
-              name={isPlaying ? 'pause-circle' : 'play-circle'}
-              size={24}
-              color="#fff"
-            />
-          </TouchableOpacity>
-        </ThemedView>
-      )}
+      {/* Player reutilizável */}
+      <MusicPlayer musica={musicaAtual} onNext={tocarProxima} />
     </ThemedView>
   );
 }
@@ -213,21 +140,6 @@ const styles = StyleSheet.create({
   albumCover: { width: 50, height: 50, borderRadius: 4 },
   musicaInfo: { flex: 1, marginLeft: 12 },
   duracao: { marginLeft: 8, color: '#b3b3b3' },
-  player: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#333'
-  },
-  playerCover: { width: 40, height: 40, borderRadius: 4 },
-  playerInfo: { flex: 1, marginLeft: 12 },
-  playButton: {
-    padding: 10,
-    backgroundColor: '#1DB954',
-    borderRadius: 20,
-    marginLeft: 12,
-  },
   loadProxButton: {
     position: 'absolute',
     bottom: 90,
@@ -242,5 +154,5 @@ const styles = StyleSheet.create({
   tempMusicaText: {
     color: '#1DB954',
     fontWeight: 'bold',
-  }
+  },
 });
